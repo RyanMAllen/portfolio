@@ -1,0 +1,227 @@
+---
+title: "RA_Week7"
+author: "Ryan M. Allen"
+date: "February 27, 2019"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r global_options, include=FALSE}
+knitr::opts_chunk$set(fig.width=12, fig.height=8, warning=FALSE, message=FALSE)
+```
+
+```{r libraries, include=FALSE}
+library(data.table)
+library(caret)
+library(pROC)
+library(e1071)
+library(randomForest)
+library(reshape)
+library(ggrepel)
+```
+
+# Data
+## Reading in Data
+```{r data_read}
+set.seed(2272019)
+# load data
+filename <- 'C:/Users/Ryan Allen/Documents/Regis/Classes/MachineLearning/Week3-NaiveBayes//heart.disease.data.clean.csv'
+heart.dt <- fread(filename)
+```
+
+### Data Cleaning
+```{r data_clean}
+# label columns in a more informative way
+col.labels <- c('age',
+                'sex',
+                'chest.pain.type',
+                'resting.blood.pressure',
+                'cholesterol',
+                'num.cigs.per.day',
+                'years.as.smoker',
+                'fasting.blood.sugar',
+                'family.history.heart.disease',
+                'resting.ecg.results',
+                'max.heart.rate.exercise',
+                'exercise.induced.angina',
+                'blood.disorder',  # Thalassemia I think
+                'heart.disease')
+
+names(heart.dt) <- col.labels
+# convert heart disease to binary outcome, 1 is heart disease
+heart.dt[heart.disease > 0, heart.disease:=1]
+heart.dt[, heart.disease:=as.factor(heart.disease)]
+# rename factor levels to more intuitive labels
+levels(heart.dt$heart.disease) <- c('no', 'yes')
+
+str(heart.dt)
+```
+
+Text Here
+
+### Descriptive Statistics
+```{r data_descriptive}
+# Means of each feature by factor
+aggregate(heart.dt, by=list(heart.dt$heart.disease), mean)
+
+# Boxplots of the features
+boxplot(heart.dt, las=2)
+
+# Melting the dataframe for only the four columns I wanted to highlight for differences by mean
+dat.m <- melt(heart.dt, id.vars='heart.disease', measure.vars=c('age','max.heart.rate.exercise','resting.blood.pressure', 'cholesterol'))
+# Boxplots by heart.disease or not
+p <- ggplot(dat.m) +
+    geom_boxplot(aes(x=variable, y=value, color=heart.disease))
+p
+```
+
+### Initial Analysis
+
+In our initial analysis, there are significant differences in the means of the following features as it pertains to the factor of heart disease or not: age, sex(higher males it looks like), cholesterol, max heart rate exercise, and blood disorder. These four or five features seem to point us to potential categories that we could use to predict heart disease or not.
+
+### Creating and Training the Model
+```{r test_train}
+# make a train/test split of the data
+tr.idxs <- createDataPartition(heart.dt$heart.disease, p = 0.8)$Resample1
+train <- heart.dt[tr.idxs]
+test <- heart.dt[-tr.idxs]
+
+# SVM tuning model to find the best gamma and cost combination
+model <- tune(svm,
+              heart.disease ~ .,
+              data = train, 
+              ranges = list(gamma = c(0.001, 0.01, 0.1),
+                            cost = c(0.1, 1, 5, 10)),
+              tunecontrol = tune.control(sampling = "cross", cross = 3),
+              kernel = 'radial')
+
+# "performance" is classification error for classification
+model
+# SVM with the best gamma and cost. Also, using the radial kernel and turned on probabilities for the ROC curve
+svm.model <- svm(heart.disease ~ .,
+                 data = train,
+                 kernel = 'radial',
+                 gamma = 0.01,
+                 C = 10,
+                 probability = T)
+
+# Random Forest Model
+rf.model <- train(heart.disease ~ .,
+                  method = 'rf',
+                  data = train,
+                  trControl = trainControl(method = 'repeatedcv', number = 3, repeats = 3),
+                  tuneGrid = expand.grid(mtry = c(4, 6, 8, 10, 12)),  # default is 4
+                  ntree = 500)
+
+```
+
+### Evaluating Model Performance
+
+```{r performance}
+# Performance on test set
+postResample(predict(svm.model, test), test$heart.disease)
+
+# Creating our yes and no as 1 and zero (numeric values)
+# Creates a table with probabilities for yes and no
+# The second column is the column of probabilities for yes
+# This assigns the column data and attribute
+numeric.targets <- as.numeric(test$heart.disease) - 1
+svm.pred.proba <- predict(svm.model, test, probability = T)
+svm.numeric.preds <- attr(svm.pred.proba, 'probabilities')[, 2]
+
+# Creating a ROC curve with our predictions and our targets
+svm.roc <- roc(numeric.targets, svm.numeric.preds)
+
+# Area Under the curve, we want this as close to 1 as we can get
+print(svm.roc$auc)
+
+# ROC Curve
+plot(svm.roc)
+
+# Finding the best threshold for our AUC
+# Default I believe is set to .5, this will give us the best 
+# threshold to round up or down
+svm.best.thresh <- coords(roc = svm.roc, x = 'best', ret = 'threshold')
+
+# Using the threshold to set our predictions as 1 or 0
+svm.test.preds <- as.numeric(svm.numeric.preds >= svm.best.thresh)
+
+# Performace of our SVM
+confusionMatrix(as.factor(svm.test.preds), as.factor(numeric.targets), positive = '1')
+
+# Accuracy of the SVM
+postResample(as.factor(svm.test.preds), as.factor(numeric.targets))
+
+# Rpeating the same steps for the Random Forest Model
+rf.preds <- predict(rf.model, test, type = 'prob')
+rf.preds.numeric <- rf.preds[, 2]
+rf.roc <- roc(numeric.targets, rf.preds.numeric)
+print(rf.roc$auc)
+
+# here is an example of plotting multiple ROC curves at once
+plot(rf.roc, col='red')
+par(new=T)
+plot(svm.roc)
+legend('bottomright', c('rf', 'svm'), col = c('red', 'black'), lty=1)
+
+# Finding the best threshold for AUC
+rf.best.thresh <- coords(rf.roc, x = 'best', ret = 'threshold')
+rf.test.preds <- as.numeric(rf.preds.numeric >= rf.best.thresh)
+
+# Accuracy of the random forest model with the best threshold
+postResample(as.factor(rf.test.preds), as.factor(numeric.targets))
+```
+
+Because the two models we have seem to trade off on being the best model (maximum area under the curve), I am assuming if we combine the two models somehow, perhaps we could improve our models accuracy and AUC.
+
+## Comparing Methods with the Average
+```{r combined}
+# Getting the average prediction of each model
+average.preds.numeric <- rowMeans(cbind(rf.preds.numeric, svm.numeric.preds))
+
+# ROC curve with the average predictions
+avg.roc <- roc(numeric.targets, average.preds.numeric)
+
+# Area under the curve of our averaged predictions
+print(avg.roc$auc)
+
+# Finding the best threshold for our AUC
+avg.best.thresh <- coords(avg.roc, x = 'best', ret = 'threshold')
+average.preds <- as.numeric(average.preds.numeric >= avg.best.thresh)
+
+# Accruacy of our averaged model
+postResample(as.factor(average.preds), as.factor(numeric.targets))
+
+# Combined plot of the average predictions curve and our SVM model
+plot.roc(avg.roc, col='red', auc.polygon = TRUE, auc.polygon.col = rgb(1,0,0, alpha =.25))
+par(new=T)
+plot.roc(svm.roc, col='blue', auc.polygon = TRUE, auc.polygon.col = rgb(0,0,1, alpha =.25))
+par(new=T)
+plot.roc(rf.roc, col='green', auc.polygon = TRUE, auc.polygon.col = rgb(0,1,0, alpha =.25))
+legend('bottomright', c('rf+svm', 'svm', 'rf'), col = c('red', 'blue', 'green'), lty=1)
+
+
+dt = data.table(Model = c("Average", "SVM", "RF"), 
+                AUC = c(avg.roc$auc, svm.roc$auc, rf.roc$auc), 
+                Accuracy = c(postResample(as.factor(average.preds), as.factor(numeric.targets))[1],
+                                     postResample(as.factor(svm.test.preds), as.factor(numeric.targets))[1],
+                                     postResample(as.factor(rf.test.preds), as.factor(numeric.targets))[1]))
+
+# Data table with accuracies and AUC
+dt
+
+# Accuracy Plot
+ggplot(dt, aes(x = Accuracy, y = AUC, label=Model))+
+    geom_point() + 
+    geom_label_repel(aes(label = Model),
+                     box.padding   = 0.35, 
+                     point.padding = 0.5,
+                     segment.color = 'grey50')
+```
+
+## Conclusions, Analysis, and Recommendations
+
+My initial thought that the combined (average model) was going to produce a better AUC and accuracy was debunked. It was the second best behind the SVM model. In the plot of the ROC curves, the blue area seems to extend farther out, leading us to visually assume it has a greater AUC and probably a higher accuracy.
+
+My recommendation is that we should use the SVM model because it has the greatest AUC and accuracy. This model has a higher sensitivity (a high true positive rate) and that is a good thing. In my opinion, it would be better to have a higher rate of patients classified as heart.disease, even if they do not have have it. This to me, with the accuracy and AUC, is a good model and the one we should use going forward.

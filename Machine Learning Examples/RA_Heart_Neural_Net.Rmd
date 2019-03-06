@@ -1,0 +1,138 @@
+---
+title: "RA_Heart_NN"
+author: "Ryan M. Allen"
+date: "February 15, 2019"
+output: pdf_document
+---
+
+```{r global_options, include=FALSE}
+knitr::opts_chunk$set(fig.width=12, fig.height=8, warning=FALSE, message=FALSE)
+```
+
+```{r libraries, include=FALSE}
+set.seed(1266892)
+
+library(data.table)
+library(neuralnet)
+library(caret)
+```
+
+# Data
+## Reading in Data
+```{r data_read}
+filename <- 'C:/Users/Ryan Allen/Documents/Regis/Classes/MachineLearning/Week3/heart.disease.data.clean.csv'
+heart.dt <- fread(filename)
+col.labels <- c('age',
+                'sex',
+                'chest.pain.type',
+                'resting.blood.pressure',
+                'cholesterol',
+                'num.cigs.per.day',
+                'years.as.smoker',
+                'fasting.blood.sugar',
+                'family.history.heart.disease',
+                'resting.ecg.results',
+                'max.heart.rate.exercise',
+                'exercise.induced.angina',
+                'blood.disorder',  # Thalassemia I think
+                'heart.disease')
+
+# Assinging the names of heart.dt as the column labels
+names(heart.dt) <- col.labels
+
+# convert heart disease to binary outcome, 1 is heart disease
+heart.dt[heart.disease > 0, heart.disease:=1]
+heart.dt[, heart.disease:=as.factor(heart.disease)]
+
+# rename factor levels to more intuitive labels
+levels(heart.dt$heart.disease) <- c('no', 'yes')
+
+# Seeing the structures that just changed
+str(heart.dt)
+ind <- sample(2,nrow(heart.dt),replace=TRUE,prob=c(0.7,0.3))
+trainset <- heart.dt[ind==1,]
+testset <- heart.dt[ind==2,]
+
+trainset$no = trainset$heart.disease == "no"
+trainset$yes = trainset$heart.disease == "yes"
+
+testset$no = testset$heart.disease == "no"
+testset$yes = testset$heart.disease == "yes"
+```
+
+In this section, I added three new columns of data, logical information pertaining to heart disease. I am curious why we have to do this. Maybe it helps the algorithm converge?
+
+
+### Creating and Training the Model
+```{r test_train}
+# Creating our model using neuralnet package
+# Using 8 hidden layers
+mynetwork <- neuralnet(no + yes ~ age + sex + chest.pain.type + resting.blood.pressure + cholesterol + 
+                           num.cigs.per.day + years.as.smoker + fasting.blood.sugar + 
+                           family.history.heart.disease + resting.ecg.results + max.heart.rate.exercise +
+                           exercise.induced.angina + blood.disorder,
+                       data=trainset,linear.output = F, hidden = 8, threshold = 0.01, learningrate = 0.02)
+
+# Using Caret Neural Network
+
+# Preparing the data for the new package
+filename <- 'C:/Users/Ryan Allen/Documents/Regis/Classes/MachineLearning/Week3/heart.disease.data.clean.csv'
+heart.dt <- fread(filename)
+col.labels <- c('age',
+                'sex',
+                'chest.pain.type',
+                'resting.blood.pressure',
+                'cholesterol',
+                'num.cigs.per.day',
+                'years.as.smoker',
+                'fasting.blood.sugar',
+                'family.history.heart.disease',
+                'resting.ecg.results',
+                'max.heart.rate.exercise',
+                'exercise.induced.angina',
+                'blood.disorder',  # Thalassemia I think
+                'heart.disease')
+
+# Assinging the names of heart.dt as the column labels
+names(heart.dt) <- col.labels
+
+# convert heart disease to binary outcome, 1 is heart disease
+heart.dt[heart.disease > 0, heart.disease:=1]
+heart.dt[, heart.disease:=as.factor(heart.disease)]
+
+# rename factor levels to more intuitive labels
+levels(heart.dt$heart.disease) <- c('no', 'yes')
+
+# Splitting the data into train and test set
+inTrain <-createDataPartition(y=heart.dt$heart.disease,p=0.75,list=FALSE)
+train.set <-heart.dt[inTrain,]
+test.set <-heart.dt[-inTrain,]
+
+# Model with Neural net as the method
+model <-train(heart.disease~.,train.set,method='nnet',trace=FALSE)
+```
+
+### Evaluating Model Performance
+
+```{r performance}
+heart_preds <- neuralnet::compute(mynetwork, testset[, 1:14])
+origi_vals <- max.col(testset[, 15:16])
+pr.nn_2 <- max.col(heart_preds$net.result)
+print(paste("Model Accuracy on Test: ", round(mean(pr.nn_2==origi_vals)*100, 2), "%.", sep = ""))
+
+# Caret Package Performance
+prediction <-predict(model,test.set)
+table(prediction,test.set$heart.disease)
+
+# Confusion matrix
+confusionMatrix(prediction,test.set$heart.disease)
+
+plot(model)
+
+```
+
+## Conclusions, Analysis, and Recommendations
+
+I am confused why we have to create the two new columns (no and yes). Is this tied to the error message that comes up saying the algorithm did not converge?  Also, I found out the order matters in your equation. I had switched 'yes' and 'no' and it decreased my accuracy crazily, but I think it was the complementary accuracy (or the not true amount). 
+
+Based on these two models, I would recommend using the caret package as it appears to have the higher accuracy and it is the cleaner of the two models. It is succinct. But perhaps the other neuralnet package allows for more variability with the equation. You could perhaps try and find out which variables have the most pull and then remove the others to clean/tidy up the algorithm.

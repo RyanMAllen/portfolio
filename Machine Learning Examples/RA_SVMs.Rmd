@@ -1,0 +1,204 @@
+---
+title: "SVM_Example"
+author: "Ryan M. Allen"
+date: "February 14, 2019"
+output: pdf_document
+---
+
+```{r global_options, include=FALSE}
+knitr::opts_chunk$set(fig.width=12, fig.height=8, warning=FALSE, message=FALSE)
+```
+
+```{r libraries, include=FALSE}
+library(data.table)
+library(caret)
+library(kernlab)
+library(e1071)
+```
+
+# Data
+## Reading in Data
+```{r data_read}
+set.seed(42)
+filename <- 'C:/Users/Ryan Allen/Documents/Regis/Classes/MachineLearning/Week3/heart.disease.data.clean.csv'
+heart.dt <- fread(filename)
+
+# Structure of the data
+str(heart.dt)
+```
+
+### Data Cleaning
+```{r data_clean}
+# Creating column labels
+col.labels <- c('age',
+                'sex',
+                'chest.pain.type',
+                'resting.blood.pressure',
+                'cholesterol',
+                'num.cigs.per.day',
+                'years.as.smoker',
+                'fasting.blood.sugar',
+                'family.history.heart.disease',
+                'resting.ecg.results',
+                'max.heart.rate.exercise',
+                'exercise.induced.angina',
+                'blood.disorder',  # Thalassemia I think
+                'heart.disease')
+
+# Assinging the names of heart.dt as the column labels
+names(heart.dt) <- col.labels
+
+# convert heart disease to binary outcome, 1 is heart disease
+heart.dt[heart.disease > 0, heart.disease:=1]
+heart.dt[, heart.disease:=as.factor(heart.disease)]
+
+# rename factor levels to more intuitive labels
+levels(heart.dt$heart.disease) <- c('no', 'yes')
+
+# Seeing the structures that just changed
+str(heart.dt)
+```
+
+At this point, I am very familiar with the heart disease data. There are 13 columns of variables and 1 response column. The goal is to predict if a patient has heart disease or not based on the data. Following this will be a variety of Support Vector Machine models that will be compared for accuracy.
+
+
+### Creating and Training the Model
+```{r test_train}
+tr.idxs <- createDataPartition(heart.dt$heart.disease, p = 0.8)$Resample1
+train <- heart.dt[tr.idxs]
+test <- heart.dt[-tr.idxs]
+# default sigma value is found with math, from sigest()
+# sigma parameters between this range will produce "good" results
+
+# sigest(heart.disease ~ ., train)
+
+# unfortunately can't give 'automatic' as an option for 
+# sigma, have to use the result from sigest
+# The radial method
+radial.model <- train(heart.disease ~ .,
+                      method = 'svmRadial',
+                      # first sigma is from sigest
+                      tuneGrid = expand.grid(sigma = c(0.025, 0.03668, 0.0692), C = c(0.1, 1, 10)),
+                      data = train)
+radial.model
+postResample(predict(radial.model, train), train$heart.disease)
+
+
+# Scaling the data
+radial.scaled.model <- train(heart.disease ~ .,
+                             method = 'svmRadial',
+                             preProcess = c('center', 'scale'),
+                             tuneGrid = expand.grid(sigma = c(0.025, 0.03668, 0.0692), C = c(0.1, 1, 10)),
+                             data = train)
+radial.scaled.model
+postResample(predict(radial.scaled.model, train), train$heart.disease)
+
+# scaling appears to make no difference
+
+# Adjust for degree, scale and c
+poly.model <- train(heart.disease ~ .,
+                    method = 'svmPoly',
+                    # scale is not really explained in the docs, guessing it's the same as gamma in e1071
+                    tuneGrid = expand.grid(degree = c(2, 3, 4), scale=c(0, 1, 2), C = c(0.1, 1, 10)),
+                    data = train)
+poly.model
+postResample(predict(poly.model, train), train$heart.disease)
+
+
+# picked a degree of 3, scale of 2, and a cost of .1
+# accurcay is not great, poly seems to be overfitting quite a bit
+# but does best on test set
+
+# SVM Model from the e1071 Package
+# gamma is the same as sigma
+# This model uses a radial kernel
+model <- tune(svm,
+              heart.disease ~ .,
+              data = train, 
+              ranges = list(gamma = c(0.001, 0.01, 0.1),
+                            cost = c(1, 5, 10)),
+              tunecontrol = tune.control(sampling = "cross", cross = 3),
+              kernel = 'radial'
+)
+# "performance" is classification error for classification
+model
+postResample(predict(model$best.model, train), train$heart.disease)
+
+
+# A linear kernel
+model_l <- tune(svm,
+                heart.disease ~ .,
+                data = train, 
+                ranges = list(cost = c(1, 5, 10)),
+                tunecontrol = tune.control(sampling = "cross", cross = 3),
+                kernel = 'linear'
+)
+model_l
+postResample(predict(model_l$best.model, train), train$heart.disease)
+
+# sometimes linear works better...or we should try optimizing rbf more, because we are at the limit for gamma
+
+model_s <- tune(svm,
+                heart.disease ~ .,
+                data = train, 
+                ranges = list(gamma = c(0.1, 0.5, 1),
+                              cost = c(1, 5, 10)),
+                tunecontrol = tune.control(sampling = "cross", cross = 3),
+                kernel = 'sigmoid'
+)
+model_s
+postResample(predict(model_s$best.model, train), train$heart.disease)
+
+
+# Polynomial Kernel 
+model_p <- tune(svm,
+                heart.disease ~ .,
+                data = train, 
+                ranges = list(gamma = c(0.1, 0.5, 1),
+                              cost = c(1, 5, 10),
+                              degree = c(2, 3, 4)),
+                tunecontrol = tune.control(sampling = "cross", cross = 3),
+                kernel = 'polynomial'
+)
+model_p
+postResample(predict(model_p$best.model, train), train$heart.disease)
+
+```
+
+### Initial Thoughts
+
+
+The previous section looked at a handful of ways to model our heart data using various kernels for SVMs. We used radial, polynomial, linear, and sigmoid. These are all various kernels that have the model look for differing functions to create the separation between the data points. Instead of it alwasy being a linear function, perhaps it could be radial, or polynomial. I also included how each function handled the training data. Below we will look at the performance of each model looking at unseen testing data.
+
+
+### Evaluating Model Performance
+
+```{r performance}
+# Caret Radial SVM
+postResample(predict(radial.model, test), test$heart.disease)
+
+# Caret Polynomial SVM
+postResample(predict(poly.model, test), test$heart.disease)
+
+# e1071 Radial SVM
+postResample(predict(model$best.model, test), test$heart.disease)
+
+# e1071 Linear SVM
+postResample(predict(model_l$best.model, test), test$heart.disease)
+
+# e1071 Sigmoid SVM
+postResample(predict(model_s$best.model, test), test$heart.disease)
+
+# e1071 Polynomial SVM
+postResample(predict(model_p$best.model, test), test$heart.disease)
+```
+
+## Conclusions, Analysis, and Recommendations
+
+Radial is typically more accurate and used for smaller dimensional data.
+Scaled data just brings the data all around the same mean and variance.
+Polynomial and sigmoid are searching for higher degree functions to find the line that separates the data, as opposed to linear. Also, when we look at these models, they are all very close to each other in accuracy, ranging around 71% to 78% accuracy.
+
+The Caret Package Polynomial model has the highest accuracy at 78% and is my recommended model. 
+
+My next steps would be to look at both the caret and e1071 packages versions of polymial SVM's and start looking deeper into the parameters. I would narrow my focus on these two packages and to the polynomial SVM. Since it had the highest accuracy already.

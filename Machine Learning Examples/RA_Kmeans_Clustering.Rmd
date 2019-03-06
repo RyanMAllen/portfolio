@@ -1,0 +1,211 @@
+---
+title: "RA_KMeans"
+author: "Ryan M. Allen"
+date: "February 22, 2019"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r global_options, include=FALSE}
+knitr::opts_chunk$set(fig.width=12, fig.height=8, warning=FALSE, message=FALSE)
+```
+
+```{r libraries, include=FALSE}
+library(data.table)
+library(caret)
+library(flexclust)
+library(NbClust)
+
+```
+
+# Data
+## Reading in Data
+```{r data_read}
+set.seed(42)
+filename <- 'C:/Users/Ryan Allen/Documents/Regis/Classes/MachineLearning/Week3-NaiveBayes//heart.disease.data.clean.csv'
+heart.dt <- fread(filename)
+
+```
+
+### Data Cleaning
+```{r data_clean}
+col.labels <- c('age',
+                'sex',
+                'chest.pain.type',
+                'resting.blood.pressure',
+                'cholesterol',
+                'num.cigs.per.day',
+                'years.as.smoker',
+                'fasting.blood.sugar',
+                'family.history.heart.disease',
+                'resting.ecg.results',
+                'max.heart.rate.exercise',
+                'exercise.induced.angina',
+                'blood.disorder',  # Thalassemia I think
+                'heart.disease')
+
+# Assinging the names of heart.dt as the column labels
+names(heart.dt) <- col.labels
+
+# convert heart disease to binary outcome, 2 is heart disease, 1 is not
+heart.dt[heart.disease > 0, heart.disease:=2]
+heart.dt[heart.disease == 0, heart.disease:=1]
+```
+
+I replaced our factors for heart.disease with 1 and 2 to match the clustering levels for the confusionmatrix down below.
+
+### Descriptive Statistics
+```{r data_descriptive}
+aggregate(heart.dt, by=list(heart.dt$heart.disease), mean)
+
+# Checking to see if there is a significant mean difference
+# Null hypothesis is that the mean difference is zero
+wilcox.test(blood.disorder ~ heart.disease, data = heart.dt)
+wilcox.test(max.heart.rate.exercise ~ heart.disease, data = heart.dt)
+wilcox.test(cholesterol ~ heart.disease, data = heart.dt)
+```
+
+### Initial Analysis
+
+Looking at the means of the data compared by heart disease, it looks like there are some major differences. Some of those differences are cholesterol, blood.disorder, and max.heart.rate.exercise. I will look at a model with just these pieces of information compared to the whole dataset.
+Based off the Wilcox test, we reject the null hypothesis that says there is a no difference in the means. meaning there is a statistically significant difference in the means.
+
+### Creating and Training the Model
+```{r test_train}
+# Finding the best number of clusters
+nbc <- NbClust(data = heart.dt, min.nc = 2, max.nc = 15, method = "kmeans")
+table(nbc$Best.n[1,])
+
+# Creating a kmeans model with the best number of clusters, in this case 2
+heart.dt$heart.disease <- as.factor(heart.dt$heart.disease)
+km.out=kmeans(heart.dt, 2, nstart = 20)
+
+# using just cholesterol
+km.cho <- kmeans(heart.dt$cholesterol, 2, nstart = 20)
+
+# Using just max heart rate
+km.max <- kmeans(heart.dt$max.heart.rate.exercise, 2, nstart = 20)
+
+# Using just blood disorder
+km.bd <- kmeans(heart.dt$blood.disorder, 2, nstart = 20)
+```
+
+### Evaluating Model Performance
+
+```{r performance}
+# Whole dataset model performance
+# A confusion matrix of our predictions
+confusionMatrix(as.factor(km.out$cluster), heart.dt$heart.disease)
+
+# Cholesterol model performance
+# A confusion matrix of our predictions
+confusionMatrix(as.factor(km.cho$cluster), heart.dt$heart.disease)
+
+# Max heart rate model
+# A confusion matrix of our predictions
+confusionMatrix(as.factor(km.max$cluster), heart.dt$heart.disease)
+
+# Blood Disorder model
+# A confusion matrix of our predictions
+confusionMatrix(as.factor(km.bd$cluster), heart.dt$heart.disease)
+
+
+# A breakdown of each column's mean by cluster
+# Whole dataset
+aggregate(heart.dt, by=list(cluster=km.out$cluster), mean)
+
+# A breakdown of each column's mean by cluster
+# Blood Disorder
+aggregate(heart.dt, by=list(cluster=km.bd$cluster), mean)
+
+# A breakdown of each column's mean by cluster
+# Max heart rate
+aggregate(heart.dt, by=list(cluster=km.max$cluster), mean)
+
+# A breakdown of each column's mean by cluster
+# Cholesteral 
+aggregate(heart.dt, by=list(cluster=km.cho$cluster), mean)
+
+```
+
+### Hierarchical Clustering Models
+```{r hierarchical}
+x <- heart.dt
+
+# Complete method looks for similar clusters
+hc.complete = hclust(dist(x), method = "complete")
+
+# Aims for clustering somewhere between single and complete
+hc.average = hclust(dist(x), method = "average") 
+
+# Single method adopts a 'friends of friends' strategy for clustering
+hc.single = hclust(dist(x), method = "single")
+
+# Plots of the clusters found by each method
+par(mfrow=c(1,3))
+plot(hc.complete,main="Complete Linkage", cex =.9) 
+plot(hc.average , main="Average Linkage", cex =.9) 
+plot(hc.single , main="Single Linkage", cex =.9)
+
+# Cutting each cluster at 2 branches (heart disease and not heart diseasae)
+c <-cutree(hc.complete,2)  
+a <- cutree(hc.average,2) 
+s <- cutree(hc.single,2) 
+
+# Conusion Matrices of each method
+# Complete Method
+confusionMatrix(as.factor(c), heart.dt$heart.disease)
+
+# Average Method
+confusionMatrix(as.factor(s), heart.dt$heart.disease)
+
+# Single Method
+confusionMatrix(as.factor(a), heart.dt$heart.disease)
+```
+## Conclusions, Analysis, and Recommendations
+
+With the six models that I have created (3 kmeans and 3 hierarchical clustering) I found that the most accurate model as far as predicting which class a data point belongs (heart disease or not), was the model with kmeans and using just the blood.disorder column. I chose a handful of columns singularly because they had significant differences in means between the two factored groups. Once I ran the models, with a model dedicated to the full dataset, I found that blood.disorder was the most accurate.
+
+Thoughts and Recommendations:
+Before I make a recommendation one significant realization I had was that my clustering was not putting people necessarily into 1's and 2's, it was just grouping similar patients together and I seemingly incorrectly said this group is 1 and this is group 2. When you look at the aggregate commands I used towards the end, you can see that group 1 and 2 do not necessarily mean heart disease (2) and no heart disease (1). Instead when you compare the original heart.dt means, you can see that heart disease patients are typically older, and have higher numbers in almost every category (except for max heart rate while exercising). But this information changes in each one of my models, so my confusion matrices are not the best way to model accuracy. Instead, I should be looking at the means, maybe even the summary statistics of each grouping and then compare them to the original data set to find my most accurate model. After you look at the bottom it still has the appearance that the Blood Disorder dataset has the smallest error therefore it is the most accurate and it is my recommendation.
+
+### Actual Check for Accuracy
+```{r accuracy}
+# Creating a data table with the range of values of each column
+# split by cluster according to each model
+full <- aggregate(heart.dt, by=list(cluster=km.out$cluster), mean)
+lapply(full, max)
+dt_full <- as.data.table(cbind(as.numeric(lapply(full, max)), as.numeric(lapply(full, min))))
+dt_full$full_range <- dt_full$V1-dt_full$V2
+
+bd <- aggregate(heart.dt, by = list(cluster = km.bd$cluster), mean)
+dt_bd <- as.data.table(cbind(as.numeric(lapply(bd, max)), as.numeric(lapply(bd, min))))
+dt_full$bd_range <- dt_bd$V1-dt_bd$V2
+
+chol <- aggregate(heart.dt, by = list(cluster = km.cho$cluster), mean)
+dt_chol <- as.data.table(cbind(as.numeric(lapply(chol, max)), as.numeric(lapply(chol, min))))
+dt_full$chol_range <- dt_chol$V1-dt_chol$V2
+
+maxh <- aggregate(heart.dt, by = list(cluster = km.max$cluster), mean)
+dt_maxh <- as.data.table(cbind(as.numeric(lapply(maxh, max)), as.numeric(lapply(maxh, min))))
+dt_full$bd_range <- dt_maxh$V1-dt_maxh$V2
+
+heart.dt$heart.disease <- as.numeric(heart.dt$heart.disease)
+orign <- aggregate(heart.dt, by = list(cluster = heart.dt$heart.disease), mean)
+dt_o <- as.data.table(cbind(as.numeric(lapply(orign, max)), as.numeric(lapply(orign, min))))
+dt_full$original_range <- dt_o$V1-dt_o$V2
+
+# Manipulating data table
+dt_full
+dt_full$V1 <- NULL
+dt_full$V2 <- NULL
+dt_full$range <- NULL
+dt_full <- dt_full[1:14,]
+
+# Using all.equal function to find the a
+all.equal(dt_full$original_range, dt_full$full_range)
+all.equal(dt_full$original_range, dt_full$bd_range)
+all.equal(dt_full$original_range, dt_full$chol_range)
+```
+
